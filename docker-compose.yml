@@ -1,0 +1,18 @@
+version: "3.9"
+services:
+  parser-api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  metadata-management:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PARSER_API_INTERNAL_URL=http://parser-api:8000
+    depends_on:
+      - parser-api
+    restart: unless-stopped

@@ -8,7 +8,10 @@
     "start": "next start"
   },
   "dependencies": {
+    "form-data": "^4.0.5",
+    "formidable": "^3.5.4",
     "next": "14.2.3",
+    "node-fetch": "^3.3.2",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   }
