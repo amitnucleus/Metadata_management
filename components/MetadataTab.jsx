@@ -1066,49 +1066,126 @@ function AuditModal({ auditLog, xlsx, fileName, onClose }) {
 function SchemaPanel({ sheets, activeSheet, onClose }) {
   const { theme } = useTheme();
   const S = useMemo(() => makeStyles(theme), [theme]);
-  const [schemaText, setSchemaText] = useState("");
-  const [result,     setResult]     = useState(null);
+  const sheetNames = Object.keys(sheets);
+
+  const [schemaText,   setSchemaText]   = useState("");
+  // "all" or a specific sheet name
+  const [targetSheet,  setTargetSheet]  = useState("all");
+  const [results,      setResults]      = useState(null); // { [sheet]: { missing, extra, matched } }
 
   function runCheck() {
-    const lines = schemaText.split("\n").map((l) => l.trim()).filter(Boolean);
+    const lines    = schemaText.split("\n").map((l) => l.trim()).filter(Boolean);
     const expected = new Set(lines);
-    const actual   = new Set(sheets[activeSheet]?.headers || []);
-    const missing  = [...expected].filter((c) => !actual.has(c));
-    const extra    = [...actual].filter((c) => !expected.has(c));
-    const matched  = [...expected].filter((c) => actual.has(c));
-    setResult({ missing, extra, matched });
+    if (!expected.size) return;
+
+    const sheetsToCheck = targetSheet === "all" ? sheetNames : [targetSheet];
+    const out = {};
+    sheetsToCheck.forEach((name) => {
+      const actual  = new Set(sheets[name]?.headers || []);
+      out[name] = {
+        missing: [...expected].filter((c) => !actual.has(c)),
+        extra:   [...actual].filter((c) => !expected.has(c)),
+        matched: [...expected].filter((c) => actual.has(c)),
+      };
+    });
+    setResults(out);
   }
+
+  // Summary counts across all checked sheets
+  const summary = results ? Object.values(results).reduce(
+    (acc, r) => ({ missing: acc.missing + r.missing.length, extra: acc.extra + r.extra.length, matched: acc.matched + r.matched.length }),
+    { missing: 0, extra: 0, matched: 0 }
+  ) : null;
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#00000099", zIndex: 1000,
       display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
       <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12,
-        padding: "24px", maxWidth: 560, width: "90vw", maxHeight: "80vh",
+        padding: "24px", maxWidth: 620, width: "92vw", maxHeight: "85vh",
         overflowY: "auto", display: "flex", flexDirection: "column", gap: 16, fontFamily: theme.font,
       }} onClick={(e) => e.stopPropagation()}>
+
+        {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: theme.pageText }}>Schema Validation — {activeSheet}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: theme.pageText }}>Schema Validation</span>
           <button onClick={onClose} style={{ ...S.btn(), fontSize: 13, padding: "3px 10px" }}>✕</button>
         </div>
+
         <div style={{ fontSize: 11, color: theme.mutedText }}>
-          Enter the expected column names (one per line). The checker will flag missing and extra columns.
+          Enter the expected column names (one per line) then choose which tab(s) to validate against.
         </div>
+
+        {/* Tab selector */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: theme.pageSubText }}>Validate against</span>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {["all", ...sheetNames].map((name) => {
+              const active = targetSheet === name;
+              return (
+                <button key={name} onClick={() => { setTargetSheet(name); setResults(null); }}
+                  style={{
+                    padding: "4px 12px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: active ? 700 : 400,
+                    background: active ? theme.tabActiveBg : "none",
+                    border: `1px solid ${active ? theme.tabActiveBorder : theme.cardBorder}`,
+                    color: active ? theme.tabActiveText : theme.tabInactiveText,
+                    fontFamily: theme.font,
+                  }}>
+                  {name === "all" ? `All tabs (${sheetNames.length})` : name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Schema input */}
         <textarea
           value={schemaText}
-          onChange={(e) => setSchemaText(e.target.value)}
+          onChange={(e) => { setSchemaText(e.target.value); setResults(null); }}
           placeholder={"source_system\ncol_name\ndata_type\nmandatory\n…"}
-          style={{ minHeight: 120, background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
+          style={{ minHeight: 130, background: theme.inputBg, border: `1px solid ${theme.cardBorder}`,
             borderRadius: 6, color: theme.pageText, fontSize: 12, padding: "8px 10px",
             fontFamily: "monospace", resize: "vertical" }}
         />
-        <button style={S.btn("primary")} onClick={runCheck}>Check Schema</button>
-        {result && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <ResultGroup label="Missing columns" items={result.missing} color={theme.invalidColor} icon="✗" />
-            <ResultGroup label="Extra columns (not in schema)" items={result.extra} color={theme.dirtyColor} icon="+" />
-            <ResultGroup label="Matched" items={result.matched} color="#22c55e" icon="✓" />
+
+        <button style={S.btn("primary")} onClick={runCheck}
+          disabled={!schemaText.trim()}>
+          Check Schema
+        </button>
+
+        {/* Summary bar */}
+        {summary && (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {summary.matched > 0 && <span style={{ ...S.badge("#22c55e"), fontSize: 11 }}>✓ {summary.matched} matched</span>}
+            {summary.missing > 0 && <span style={{ ...S.badge(theme.invalidColor), fontSize: 11 }}>✗ {summary.missing} missing</span>}
+            {summary.extra   > 0 && <span style={{ ...S.badge(theme.dirtyColor),   fontSize: 11 }}>+ {summary.extra} extra</span>}
+            {summary.missing === 0 && summary.extra === 0 && (
+              <span style={{ fontSize: 12, color: "#22c55e", fontWeight: 600 }}>All columns match perfectly across checked tabs.</span>
+            )}
           </div>
         )}
+
+        {/* Per-sheet results */}
+        {results && Object.entries(results).map(([name, r]) => {
+          const hasIssues = r.missing.length > 0 || r.extra.length > 0;
+          return (
+            <div key={name} style={{ background: theme.surfaceBg, border: `1px solid ${hasIssues ? theme.cardBorder : "#22c55e44"}`,
+              borderRadius: 8, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: theme.pageText }}>{name}</span>
+                {!hasIssues
+                  ? <span style={{ ...S.badge("#22c55e"), fontSize: 10 }}>✓ OK</span>
+                  : <>
+                      {r.missing.length > 0 && <span style={{ ...S.badge(theme.invalidColor), fontSize: 10 }}>✗ {r.missing.length} missing</span>}
+                      {r.extra.length   > 0 && <span style={{ ...S.badge(theme.dirtyColor),   fontSize: 10 }}>+ {r.extra.length} extra</span>}
+                    </>
+                }
+              </div>
+              <ResultGroup label="Missing" items={r.missing} color={theme.invalidColor} icon="✗" />
+              <ResultGroup label="Extra (not in schema)" items={r.extra} color={theme.dirtyColor} icon="+" />
+              <ResultGroup label="Matched" items={r.matched} color="#22c55e" icon="✓" />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1525,6 +1602,7 @@ export default function MetadataTab() {
   );
   const [columnAssignments, setColumnAssignments]  = useState({});
   const [searchQuery,       setSearchQuery]        = useState("");
+  const [searchExpanded,    setSearchExpanded]     = useState(false);
   const [showDiff,          setShowDiff]           = useState(false);
   const [showAudit,         setShowAudit]          = useState(false);
   const [showProfile,       setShowProfile]        = useState(false);
@@ -1589,7 +1667,7 @@ export default function MetadataTab() {
     setActiveSheet(Object.keys(parsed)[0] || null);
     setFileName(name); setFileType(type); setError(null);
     setDirtySet(new Set()); setColumnAssignments({});
-    setSearchQuery(""); setAuditLog([]); setComments({});
+    setSearchQuery(""); setSearchExpanded(false); setAuditLog([]); setComments({});
   }, [resetSheets]);
 
   const parseFile = useCallback((file) => {
@@ -1647,7 +1725,7 @@ export default function MetadataTab() {
     resetSheets(null); setOriginalSheets(null);
     setActiveSheet(null); setFileName(null); setFileType(null);
     setError(null); setDirtySet(new Set()); setValidationMap(new Map());
-    setColumnAssignments({}); setSearchQuery(""); setAuditLog([]); setComments({});
+    setColumnAssignments({}); setSearchQuery(""); setSearchExpanded(false); setAuditLog([]); setComments({});
   };
 
   const onCellChange = useCallback((rowIdx, colKey, newVal) => {
@@ -1904,56 +1982,179 @@ export default function MetadataTab() {
           </div>
 
           {/* ── Search bar ────────────────────────────────────────────────── */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
-              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
-                color: theme.dimText, fontSize: 13, pointerEvents: "none" }}>🔍</span>
-              <input
-                value={searchQuery}
-                onChange={(e) => {
-                  const q = e.target.value;
-                  setSearchQuery(q);
-                  // auto-switch to first tab that has a match
-                  if (q.trim()) {
-                    const ql = q.trim().toLowerCase();
-                    const firstMatch = sheetNames.find((name) => {
-                      const { headers, rows } = sheets[name];
-                      return rows.some((row) =>
-                        headers.some((h) => row[h] != null && String(row[h]).toLowerCase().includes(ql))
-                      );
-                    });
-                    if (firstMatch && firstMatch !== activeSheet) setActiveSheet(firstMatch);
-                  }
-                }}
-                placeholder="Search across all tabs…"
-                style={{ width: "100%", boxSizing: "border-box",
-                  background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 7,
-                  color: theme.pageText, fontSize: 12, padding: "7px 10px 7px 32px",
-                  outline: "none", fontFamily: theme.font }}
-                onFocus={(e) => e.target.style.borderColor = theme.accent}
-                onBlur={(e) => e.target.style.borderColor = theme.cardBorder}
-              />
-              {searchQuery && (
-                <button onClick={() => setSearchQuery("")}
-                  style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
-                    background: "none", border: "none", cursor: "pointer", color: theme.mutedText, fontSize: 13 }}>✕</button>
-              )}
-            </div>
-            {searchQuery.trim() && (() => {
-              const ql = searchQuery.trim().toLowerCase();
-              const total = sheetNames.reduce((acc, name) => {
-                const { headers, rows } = sheets[name];
-                return acc + rows.filter((row) =>
-                  headers.some((h) => row[h] != null && String(row[h]).toLowerCase().includes(ql))
-                ).length;
-              }, 0);
+          {(() => {
+            const ql = searchQuery.trim().toLowerCase();
+
+            // Build full cross-tab match list (used by both summary badge + expanded panel)
+            const allMatches = ql ? sheetNames.flatMap((sheetName) => {
+              const { headers, rows } = sheets[sheetName];
+              return rows.flatMap((row, rowIdx) => {
+                const hitCols = headers.filter((h) => row[h] != null && String(row[h]).toLowerCase().includes(ql));
+                if (!hitCols.length) return [];
+                return [{ sheetName, rowIdx, row, hitCols }];
+              });
+            }) : [];
+
+            const totalMatches = allMatches.length;
+            const matchSheets  = [...new Set(allMatches.map((m) => m.sheetName))];
+
+            // Highlight helper — wraps matching substring in a <mark>-style span
+            function Highlight({ text }) {
+              if (!ql || text == null) return <span style={{ color: theme.dimText }}>—</span>;
+              const s   = String(text);
+              const idx = s.toLowerCase().indexOf(ql);
+              if (idx === -1) return <span style={{ color: theme.cellText }}>{s}</span>;
               return (
-                <span style={{ fontSize: 11, color: theme.mutedText, whiteSpace: "nowrap" }}>
-                  {total} match{total !== 1 ? "es" : ""} across {sheetNames.length} tab{sheetNames.length !== 1 ? "s" : ""}
+                <span style={{ color: theme.cellText }}>
+                  {s.slice(0, idx)}
+                  <mark style={{ background: `${theme.accent}55`, color: theme.pageText,
+                    borderRadius: 2, padding: "0 1px" }}>{s.slice(idx, idx + ql.length)}</mark>
+                  {s.slice(idx + ql.length)}
                 </span>
               );
-            })()}
-          </div>
+            }
+
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                {/* Input row */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ position: "relative", flex: 1, maxWidth: 420 }}>
+                    <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
+                      color: theme.dimText, fontSize: 13, pointerEvents: "none" }}>🔍</span>
+                    <input
+                      value={searchQuery}
+                      onChange={(e) => {
+                        const q = e.target.value;
+                        setSearchQuery(q);
+                        if (q.trim()) {
+                          const ql2 = q.trim().toLowerCase();
+                          const firstMatch = sheetNames.find((name) => {
+                            const { headers, rows } = sheets[name];
+                            return rows.some((row) =>
+                              headers.some((h) => row[h] != null && String(row[h]).toLowerCase().includes(ql2))
+                            );
+                          });
+                          if (firstMatch && firstMatch !== activeSheet) setActiveSheet(firstMatch);
+                        }
+                      }}
+                      placeholder="Search across all tabs…"
+                      style={{ width: "100%", boxSizing: "border-box",
+                        background: theme.cardBg,
+                        border: `1px solid ${searchExpanded ? theme.accent : theme.cardBorder}`,
+                        borderRadius: searchExpanded ? "7px 7px 0 0" : 7,
+                        color: theme.pageText, fontSize: 12,
+                        padding: "7px 32px 7px 32px",
+                        outline: "none", fontFamily: theme.font,
+                        transition: "border-color 0.15s, border-radius 0.1s",
+                      }}
+                      onFocus={(e) => e.target.style.borderColor = theme.accent}
+                      onBlur={(e) => { if (!searchExpanded) e.target.style.borderColor = theme.cardBorder; }}
+                    />
+                    {searchQuery && (
+                      <button onClick={() => { setSearchQuery(""); setSearchExpanded(false); }}
+                        style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                          background: "none", border: "none", cursor: "pointer", color: theme.mutedText, fontSize: 13 }}>✕</button>
+                    )}
+                  </div>
+
+                  {/* Match summary + expand toggle */}
+                  {ql && totalMatches > 0 && (
+                    <button
+                      onClick={() => setSearchExpanded((v) => !v)}
+                      style={{
+                        background: searchExpanded ? `${theme.accent}22` : "none",
+                        border: `1px solid ${searchExpanded ? theme.accent + "55" : theme.cardBorder}`,
+                        borderRadius: 7, padding: "5px 12px", cursor: "pointer",
+                        color: searchExpanded ? theme.accentText : theme.mutedText,
+                        fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", fontFamily: theme.font,
+                        display: "flex", alignItems: "center", gap: 5, transition: "all 0.15s",
+                      }}
+                      title={searchExpanded ? "Collapse results" : "Expand all results"}
+                    >
+                      {totalMatches} match{totalMatches !== 1 ? "es" : ""} across {matchSheets.length} tab{matchSheets.length !== 1 ? "s" : ""}
+                      <span style={{ fontSize: 9 }}>{searchExpanded ? "▲" : "▼"}</span>
+                    </button>
+                  )}
+                  {ql && totalMatches === 0 && (
+                    <span style={{ fontSize: 11, color: theme.mutedText, fontStyle: "italic" }}>No matches</span>
+                  )}
+                </div>
+
+                {/* ── Expanded results panel ─────────────────────────────── */}
+                {searchExpanded && ql && totalMatches > 0 && (
+                  <div style={{
+                    border: `1px solid ${theme.accent}55`,
+                    borderTop: "none",
+                    borderRadius: "0 0 8px 8px",
+                    background: theme.surfaceBg,
+                    maxHeight: 420,
+                    overflowY: "auto",
+                    maxWidth: 420,
+                  }}>
+                    {matchSheets.map((sheetName) => {
+                      const sheetMatches = allMatches.filter((m) => m.sheetName === sheetName);
+                      return (
+                        <div key={sheetName}>
+                          {/* Sheet group header */}
+                          <div style={{
+                            padding: "6px 12px", fontSize: 10, fontWeight: 700,
+                            color: theme.accentText, textTransform: "uppercase", letterSpacing: 0.5,
+                            background: theme.headerBg,
+                            borderBottom: `1px solid ${theme.cardBorder}`,
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                          }}>
+                            <span>{sheetName}</span>
+                            <span style={{ fontWeight: 400, color: theme.mutedText }}>
+                              {sheetMatches.length} row{sheetMatches.length !== 1 ? "s" : ""}
+                            </span>
+                          </div>
+
+                          {/* Match rows */}
+                          {sheetMatches.map(({ rowIdx, row, hitCols }) => (
+                            <button
+                              key={rowIdx}
+                              onClick={() => {
+                                setActiveSheet(sheetName);
+                                setSearchExpanded(false);
+                              }}
+                              style={{
+                                display: "flex", flexDirection: "column", gap: 3,
+                                width: "100%", textAlign: "left",
+                                background: "none", border: "none",
+                                borderBottom: `1px solid ${theme.cardBorder}`,
+                                padding: "7px 12px", cursor: "pointer",
+                                fontFamily: theme.font, transition: "background 0.1s",
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = theme.surfaceAlt}
+                              onMouseLeave={(e) => e.currentTarget.style.background = "none"}
+                            >
+                              {/* Row number */}
+                              <span style={{ fontSize: 9, color: theme.dimText, fontWeight: 600 }}>
+                                Row {rowIdx + 1}
+                              </span>
+                              {/* Hit cells */}
+                              {hitCols.map((col) => (
+                                <div key={col} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                                  <span style={{
+                                    fontSize: 10, fontWeight: 700, color: theme.mutedText,
+                                    minWidth: 80, maxWidth: 120, overflow: "hidden",
+                                    textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0,
+                                  }} title={col}>{col}</span>
+                                  <span style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    <Highlight text={row[col]} />
+                                  </span>
+                                </div>
+                              ))}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* ── Rules panel ───────────────────────────────────────────────── */}
           <RulesPanel
